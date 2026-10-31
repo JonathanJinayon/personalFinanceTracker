@@ -53,10 +53,10 @@ export function ExpenseSummary({
         <div>
           <div className="mb-2 flex items-baseline justify-between gap-3">
             <p className="text-xs font-medium text-muted-foreground">
-              Last 6 months
+              Recent months
             </p>
             <p className="text-xs text-muted-foreground">
-              This month{" "}
+              Selected month{" "}
               <span className="font-medium text-foreground tabular-nums">
                 {formatPeso(totalExpenses)}
               </span>
@@ -130,7 +130,6 @@ export function ExpenseSummary({
               const percent =
                 total > 0 ? (Number(item.amount) / total) * 100 : 0;
               const color = `var(--chart-${index + 1})`;
-
               return (
                 <li key={item.category}>
                   <div className="flex items-center justify-between gap-3 text-xs">

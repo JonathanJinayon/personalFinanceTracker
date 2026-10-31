@@ -75,9 +75,9 @@ export function AccountsManager({
 
   return (
     <div className="flex flex-col gap-4 sm:gap-6">
-      <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+      <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
         <div className="max-w-2xl">
-          <p className="text-sm leading-relaxed text-muted-foreground">
+          <p className="max-w-2xl text-sm leading-relaxed text-muted-foreground">
             Manage the bank, e-wallet, and cash accounts used to record your
             income and expenses.
           </p>
@@ -93,7 +93,7 @@ export function AccountsManager({
         />
       </div>
 
-      <div className="flex items-start gap-2 rounded-lg border border-dashed bg-muted/20 px-3 py-2.5 text-xs text-muted-foreground">
+      <div className="flex items-start gap-2 rounded-md border border-dashed bg-muted/20 px-3 py-2.5 text-xs text-muted-foreground">
         <Info className="mt-0.5 size-3.5 shrink-0" />
         <p>
           Preview data only. Changes are temporary and reset when you reload

@@ -53,35 +53,35 @@
 }
 
 :root {
-  --background: oklch(0.983 0.003 145);
+  --background: oklch(0.975 0.006 145);
   --foreground: oklch(0.215 0.012 155);
-  --card: oklch(1 0 0);
+  --card: oklch(0.999 0.002 145);
   --card-foreground: oklch(0.215 0.012 155);
   --popover: oklch(1 0 0);
   --popover-foreground: oklch(0.215 0.012 155);
-  --primary: oklch(0.435 0.086 158);
+  --primary: oklch(0.42 0.105 157);
   --primary-foreground: oklch(0.993 0.004 145);
   --secondary: oklch(0.962 0.007 150);
   --secondary-foreground: oklch(0.28 0.014 155);
   --muted: oklch(0.962 0.005 150);
   --muted-foreground: oklch(0.523 0.012 155);
-  --accent: oklch(0.951 0.017 158);
+  --accent: oklch(0.94 0.025 155);
   --accent-foreground: oklch(0.31 0.04 158);
   --destructive: oklch(0.577 0.214 27.3);
-  --success: oklch(0.52 0.115 155);
+  --success: oklch(0.49 0.13 153);
   --success-foreground: oklch(0.993 0.004 145);
   --warning: oklch(0.74 0.135 75);
   --warning-foreground: oklch(0.26 0.04 75);
-  --border: oklch(0.915 0.006 150);
-  --input: oklch(0.902 0.007 150);
+  --border: oklch(0.9 0.009 150);
+  --input: oklch(0.89 0.009 150);
   --ring: oklch(0.585 0.075 158);
   --chart-1: oklch(0.55 0.105 158);
   --chart-2: oklch(0.66 0.085 185);
   --chart-3: oklch(0.6 0.055 245);
   --chart-4: oklch(0.77 0.115 78);
   --chart-5: oklch(0.55 0.012 155);
-  --radius: 0.75rem;
-  --sidebar: oklch(0.989 0.002 145);
+  --radius: 0.7rem;
+  --sidebar: oklch(0.965 0.009 150);
   --sidebar-foreground: oklch(0.3 0.012 155);
   --sidebar-primary: oklch(0.435 0.086 158);
   --sidebar-primary-foreground: oklch(0.993 0.004 145);
@@ -92,34 +92,34 @@
 }
 
 .dark {
-  --background: oklch(0.18 0.01 155);
+  --background: oklch(0.17 0.01 155);
   --foreground: oklch(0.96 0.004 145);
-  --card: oklch(0.225 0.012 155);
+  --card: oklch(0.215 0.012 155);
   --card-foreground: oklch(0.96 0.004 145);
-  --popover: oklch(0.225 0.012 155);
+  --popover: oklch(0.225 0.01 155);
   --popover-foreground: oklch(0.96 0.004 145);
-  --primary: oklch(0.72 0.1 158);
+  --primary: oklch(0.72 0.12 157);
   --primary-foreground: oklch(0.19 0.02 158);
   --secondary: oklch(0.28 0.012 155);
   --secondary-foreground: oklch(0.96 0.004 145);
-  --muted: oklch(0.28 0.012 155);
+  --muted: oklch(0.265 0.01 155);
   --muted-foreground: oklch(0.71 0.012 150);
   --accent: oklch(0.3 0.025 158);
   --accent-foreground: oklch(0.93 0.02 158);
   --destructive: oklch(0.704 0.191 22.2);
-  --success: oklch(0.7 0.11 155);
+  --success: oklch(0.73 0.13 153);
   --success-foreground: oklch(0.18 0.02 155);
   --warning: oklch(0.8 0.13 78);
-  --warning-foreground: oklch(0.22 0.03 78);
-  --border: oklch(1 0 0 / 10%);
-  --input: oklch(1 0 0 / 15%);
+  --warning-foreground: oklch(0.9 0.09 80);
+  --border: oklch(1 0 0 / 12%);
+  --input: oklch(1 0 0 / 14%);
   --ring: oklch(0.6 0.08 158);
   --chart-1: oklch(0.68 0.1 158);
   --chart-2: oklch(0.72 0.085 185);
   --chart-3: oklch(0.68 0.06 245);
   --chart-4: oklch(0.8 0.11 78);
   --chart-5: oklch(0.7 0.012 155);
-  --sidebar: oklch(0.205 0.012 155);
+  --sidebar: oklch(0.19 0.012 155);
   --sidebar-foreground: oklch(0.93 0.006 145);
   --sidebar-primary: oklch(0.72 0.1 158);
   --sidebar-primary-foreground: oklch(0.19 0.02 158);
@@ -137,11 +137,143 @@
     @apply font-sans;
   }
   body {
-    @apply bg-background text-foreground antialiased;
+    @apply text-foreground antialiased;
+    background-color: transparent;
+  }
+  body::before {
+    content: "";
+    position: fixed;
+    inset: 0;
+    z-index: 0;
+    pointer-events: none;
+    background: var(--background);
+    view-transition-name: theme-background;
+  }
+  body > * {
+    position: relative;
+    z-index: 1;
+  }
+  :where(button, a, input, textarea, [role="combobox"], [role="tab"]) {
+    -webkit-tap-highlight-color: transparent;
+  }
+  :where(button, a, [role="button"], [role="tab"]) {
+    transition-property: color, background-color, border-color, box-shadow;
+    transition-duration: 150ms;
+    transition-timing-function: ease-out;
   }
   h1,
   h2,
   h3 {
     @apply tracking-tight;
+  }
+}
+
+[data-slot="card"] {
+  border-color: color-mix(in oklab, var(--border) 78%, transparent);
+  box-shadow: 0 1px 2px color-mix(in oklab, var(--foreground) 3%, transparent), 0 8px 24px -20px color-mix(in oklab, var(--foreground) 12%, transparent);
+}
+
+.dark [data-slot="card"] {
+  box-shadow: 0 1px 2px rgb(0 0 0 / 12%), 0 10px 28px -22px rgb(0 0 0 / 45%);
+}
+
+@keyframes tigom-mascot-idle {
+  0%, 100% { transform: translateY(0) rotate(0deg); }
+  50% { transform: translateY(-4px) rotate(-1deg); }
+}
+
+.tigom-mascot-idle {
+  animation: tigom-mascot-idle 3.6s ease-in-out infinite;
+}
+
+.tigom-mascot-eyes {
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: tigom-mascot-blink 5.4s ease-in-out infinite;
+}
+
+.tigom-mascot-react {
+  animation: tigom-mascot-react 480ms cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+@keyframes tigom-mascot-blink {
+  0%, 46%, 50%, 86%, 90%, 100% { transform: scaleY(1); }
+  48%, 88% { transform: scaleY(0.12); }
+}
+
+@keyframes tigom-mascot-react {
+  0%, 100% { transform: translateY(0) rotate(0deg); }
+  35% { transform: translateY(-9px) rotate(4deg); }
+  70% { transform: translateY(-2px) rotate(-3deg); }
+}
+
+@keyframes tigom-mascot-savings-wave {
+  0%, 100% { transform: rotate(0deg) translateY(0); }
+  20%, 60% { transform: rotate(-13deg) translateY(-2px); }
+  40%, 80% { transform: rotate(8deg) translateY(1px); }
+}
+
+@keyframes tigom-mascot-coin-bob {
+  0%, 100% { transform: translateY(0) rotate(0); }
+  50% { transform: translateY(-3px) rotate(8deg); }
+}
+
+.tigom-mascot-savings-wave {
+  transform-box: fill-box;
+  transform-origin: 80% 90%;
+  animation: tigom-mascot-savings-wave 2.8s ease-in-out infinite;
+}
+
+.tigom-mascot-coin {
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: tigom-mascot-coin-bob 2.8s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .tigom-mascot-idle,
+  .tigom-mascot-eyes,
+  .tigom-mascot-react {
+    animation: none;
+  }
+  .tigom-mascot-savings-wave,
+  .tigom-mascot-coin {
+    animation: none;
+  }
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  ::view-transition-old(theme-background),
+  ::view-transition-new(theme-background) {
+    animation: none;
+    mix-blend-mode: normal;
+    contain: strict;
+  }
+
+  ::view-transition-old(theme-background) {
+    z-index: 0;
+  }
+
+  ::view-transition-new(theme-background) {
+    z-index: 1;
+    animation: liquid-theme-reveal 620ms cubic-bezier(0.4, 0, 0.2, 1) both;
+  }
+
+  @keyframes liquid-theme-reveal {
+    0% {
+      clip-path: circle(0% at 0% 100%);
+      filter: url("#theme-liquid-warp");
+    }
+    100% {
+      clip-path: circle(155% at 0% 100%);
+      filter: url("#theme-liquid-warp");
+    }
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  ::view-transition-old(theme-background),
+  ::view-transition-new(theme-background) {
+    animation: none;
   }
 }

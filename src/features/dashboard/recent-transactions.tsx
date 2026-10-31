@@ -84,11 +84,11 @@ export function RecentTransactions({
             return (
               <li
                 key={transaction.id}
-                className="-mx-2 flex items-center gap-3 rounded-lg px-2 py-3 transition-colors first:pt-0 hover:bg-muted/40 last:pb-0"
+                className="-mx-2 flex items-center gap-3 rounded-md px-2 py-3 transition-colors first:pt-0 hover:bg-muted/40 last:pb-0"
               >
                 <span
                   className={cn(
-                    "flex size-9 shrink-0 items-center justify-center rounded-lg",
+                    "flex size-9 shrink-0 items-center justify-center rounded-md",
                     transactionIconClasses[transaction.type],
                   )}
                 >

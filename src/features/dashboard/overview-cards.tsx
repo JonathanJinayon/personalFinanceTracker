@@ -36,13 +36,6 @@ export function OverviewCards({
 }: OverviewCardsProps) {
   const cards: OverviewCard[] = [
     {
-      label: "Total balance",
-      value: totalBalance,
-      note: `${accountCount} active accounts`,
-      icon: Wallet,
-      iconClassName: "bg-primary/10 text-primary",
-    },
-    {
       label: "Total income",
       value: monthlyIncome,
       note: period,
@@ -66,42 +59,46 @@ export function OverviewCards({
   ];
 
   return (
-    <section
-      aria-label="Financial overview"
-      className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4"
-    >
-      {cards.map((card) => {
-        const Icon = card.icon;
+    <section aria-label="Financial overview" className="grid gap-4 xl:grid-cols-[1.35fr_2fr]">
+      <Card className="relative isolate overflow-hidden border-primary/15 bg-[linear-gradient(135deg,color-mix(in_oklab,var(--primary)_9%,var(--card)),var(--card)_62%)] [--card-spacing:--spacing(6)] sm:[--card-spacing:--spacing(7)]">
+        <span aria-hidden className="pointer-events-none absolute -right-12 -top-16 size-52 rounded-full border border-primary/10" />
+        <span aria-hidden className="pointer-events-none absolute -right-4 -top-8 size-36 rounded-full border border-primary/10" />
+        <CardContent className="relative flex min-h-44 flex-col justify-between gap-7">
+          <div className="flex items-center justify-between gap-3">
+            <div>
+              <p className="text-xs font-medium text-muted-foreground">Total balance</p>
+              <p className="mt-1 text-xs text-muted-foreground">Across {accountCount} active accounts</p>
+            </div>
+            <span className="flex size-9 items-center justify-center rounded-md bg-primary/10 text-primary"><Wallet className="size-4" /></span>
+          </div>
+          <div>
+            <Money amount={totalBalance} className="block text-3xl font-semibold tracking-tight tabular-nums sm:text-4xl" />
+            <p className="mt-2 text-xs text-muted-foreground">Available across your accounts</p>
+          </div>
+        </CardContent>
+      </Card>
+      <div className="grid gap-3 sm:grid-cols-3">
+        {cards.map((card) => {
+          const Icon = card.icon;
 
-        return (
-          <Card key={card.label} className="[--card-spacing:--spacing(5)]">
-            <CardContent className="flex flex-col gap-3">
-              <div className="flex items-center justify-between gap-3">
-                <p className="text-xs font-medium text-muted-foreground">
-                  {card.label}
-                </p>
-                <span
-                  className={cn(
-                    "flex size-8 items-center justify-center rounded-lg",
-                    card.iconClassName,
-                  )}
-                >
-                  <Icon className="size-4" strokeWidth={2} />
-                </span>
-              </div>
-              <div>
-                <Money
-                  amount={card.value}
-                  className="text-2xl font-semibold tracking-tight"
-                />
-                <p className="mt-1 text-xs text-muted-foreground">
-                  {card.note}
-                </p>
-              </div>
-            </CardContent>
-          </Card>
-        );
-      })}
+          return (
+            <Card key={card.label} className="min-h-32 [--card-spacing:--spacing(5)]">
+              <CardContent className="flex flex-col gap-3">
+                <div className="flex items-center justify-between gap-3">
+                  <p className="text-xs font-medium text-muted-foreground">{card.label}</p>
+                  <span className={cn("flex size-8 items-center justify-center rounded-md", card.iconClassName)}>
+                    <Icon className="size-4" strokeWidth={2} />
+                  </span>
+                </div>
+                <div>
+                  <Money amount={card.value} className="text-xl font-semibold tracking-tight tabular-nums sm:text-2xl" />
+                  <p className="mt-1 text-xs text-muted-foreground">{card.note}</p>
+                </div>
+              </CardContent>
+            </Card>
+          );
+        })}
+      </div>
     </section>
   );
 }

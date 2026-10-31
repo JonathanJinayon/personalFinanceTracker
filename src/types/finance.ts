@@ -26,7 +26,11 @@ export interface Transaction {
   accountId: string;
   accountName: string;
   destinationAccountName?: string;
+  destinationAccountId?: string;
   category?: string;
+  notes?: string;
+  fee?: string;
+  cancelled?: boolean;
 }
 
 export interface SavingsGoal {
@@ -35,6 +39,17 @@ export interface SavingsGoal {
   targetAmount: string;
   savedAmount: string;
   targetDate?: string;
+  description?: string;
+  isArchived?: boolean;
+  completed?: boolean;
+  history?: SavingsAllocation[];
+}
+
+export interface SavingsAllocation {
+  id: string;
+  amount: string;
+  date: string;
+  note: string;
 }
 
 export interface MonthlySummary {

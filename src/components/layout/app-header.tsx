@@ -31,9 +31,6 @@ export function AppHeader() {
         <h1 className="truncate text-base font-semibold tracking-tight sm:text-lg">
           {current.title}
         </h1>
-        <p className="hidden truncate text-xs text-muted-foreground sm:block">
-          {current.description}
-        </p>
       </div>
 
       <AddTransactionDialog />

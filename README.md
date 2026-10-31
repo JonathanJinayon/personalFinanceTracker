@@ -7,6 +7,7 @@ A private, single-user finance tracker for recording accounts, income, expenses,
 Frontend-first. The interface currently runs on local mock data. There is no authentication, database connection, server action, or transaction persistence yet.
 
 - Application shell and design system: complete
+- Light and dark themes: complete (light default, persisted)
 - Dashboard UI: complete (mock data)
 - Accounts UI: complete (mock data, temporary in-session changes)
 - Transactions, Savings, Reports, Settings: placeholders

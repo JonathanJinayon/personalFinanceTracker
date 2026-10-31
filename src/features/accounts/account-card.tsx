@@ -24,13 +24,13 @@ export function AccountCard({
   return (
     <Card
       className={cn(
-        "h-full transition-shadow hover:shadow-sm [--card-spacing:--spacing(5)]",
+        "h-full transition-colors hover:border-primary/25 [--card-spacing:--spacing(5)]",
         account.isArchived && "bg-muted/25",
       )}
     >
       <CardContent className="flex h-full flex-col gap-4">
         <div className="flex items-start gap-3">
-          <span className="flex size-10 shrink-0 items-center justify-center rounded-xl border bg-background text-muted-foreground">
+          <span className={cn("flex size-10 shrink-0 items-center justify-center rounded-md border bg-primary/5 text-primary", account.isArchived && "bg-muted text-muted-foreground")}>
             <Icon className="size-[18px]" strokeWidth={1.9} />
           </span>
           <div className="min-w-0 flex-1">

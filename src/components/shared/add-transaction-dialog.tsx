@@ -96,16 +96,35 @@ export function AddTransactionDialog({
 }) {
   const [open, setOpen] = useState(false);
   const [date, setDate] = useState("");
+  const [error, setError] = useState("");
 
   function handleOpenChange(nextOpen: boolean) {
     if (nextOpen) {
-      setDate(new Date().toISOString().slice(0, 10));
+      const now = new Date();
+      setDate(new Date(now.getTime() - now.getTimezoneOffset() * 60_000).toISOString().slice(0, 10));
+      setError("");
     }
     setOpen(nextOpen);
   }
 
   function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    const form = event.currentTarget;
+    const tab = form.closest('[role="tabpanel"]')?.getAttribute("aria-labelledby")?.replace(/^radix-.*-trigger-/, "");
+    const data = new FormData(form);
+    const amount = Number(data.get("amount"));
+    const description = String(data.get("description") ?? "").trim();
+    const account = String(data.get("account") ?? "");
+    const category = String(data.get("category") ?? "");
+    const source = String(data.get("from") ?? "");
+    const destination = String(data.get("to") ?? "");
+
+    if (!Number.isFinite(amount) || amount <= 0 || !date || !description || (tab !== "transfer" && !account) || (tab === "expense" && !category) || (tab === "transfer" && (!source || !destination || source === destination))) {
+      setError("Complete all required fields with valid values. Transfers require two different accounts.");
+      return;
+    }
+
+    setError("");
     setOpen(false);
     toast("Preview only", {
       description:
@@ -124,7 +143,7 @@ export function AddTransactionDialog({
           </Button>
         )}
       </DialogTrigger>
-      <DialogContent className="sm:max-w-lg">
+      <DialogContent className="max-h-[90svh] overflow-y-auto sm:max-w-lg">
         <DialogHeader>
           <DialogTitle>Add transaction</DialogTitle>
           <DialogDescription>
@@ -132,7 +151,7 @@ export function AddTransactionDialog({
           </DialogDescription>
         </DialogHeader>
 
-        <Tabs defaultValue={defaultTab} className="gap-4">
+        <Tabs defaultValue={defaultTab} className="gap-4" onValueChange={() => setError("")}>
           <TabsList className="grid w-full grid-cols-3">
             <TabsTrigger value="expense">
               <ArrowUpRight data-icon="inline-start" />
@@ -330,6 +349,7 @@ export function AddTransactionDialog({
             </form>
           </TabsContent>
         </Tabs>
+        {error ? <p role="alert" className="text-xs text-destructive">{error}</p> : null}
       </DialogContent>
     </Dialog>
   );

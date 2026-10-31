@@ -48,9 +48,9 @@ export function AccountOverview({
             return (
               <li
                 key={account.id}
-                className="-mx-2 flex items-center gap-3 rounded-lg px-2 py-2.5 transition-colors hover:bg-muted/60"
+                className="-mx-2 flex items-center gap-3 rounded-md px-2 py-2.5 transition-colors hover:bg-muted/60"
               >
-                <span className="flex size-9 shrink-0 items-center justify-center rounded-lg border bg-muted/50 text-muted-foreground">
+                <span className="flex size-9 shrink-0 items-center justify-center rounded-md border bg-muted/50 text-muted-foreground">
                   <Icon className="size-4" strokeWidth={1.9} />
                 </span>
                 <div className="min-w-0 flex-1">

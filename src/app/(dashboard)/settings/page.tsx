@@ -1,15 +1,8 @@
 import type { Metadata } from "next";
-import { Settings } from "lucide-react";
-import { PagePlaceholder } from "@/components/shared/page-placeholder";
+import { SettingsPage as SettingsPageView } from "@/features/settings/settings-page";
 
 export const metadata: Metadata = { title: "Settings" };
 
 export default function SettingsPage() {
-  return (
-    <PagePlaceholder
-      icon={Settings}
-      title="Settings"
-      description="Manage categories, preferences, and the details of your personal account."
-    />
-  );
+  return <SettingsPageView />;
 }

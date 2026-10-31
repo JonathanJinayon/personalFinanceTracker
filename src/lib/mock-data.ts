@@ -1,10 +1,6 @@
 import type {
   Account,
   Category,
-  CategorySpend,
-  MonthlySpend,
-  MonthlySummary,
-  SavingsGoal,
   Transaction,
 } from "@/types/finance";
 
@@ -106,6 +102,8 @@ export const mockTransactions: Transaction[] = [
     accountId: "acc-bpi",
     accountName: "BPI Savings",
     destinationAccountName: "GCash",
+    destinationAccountId: "acc-gcash",
+    fee: "15.00",
   },
   {
     id: "txn-004",
@@ -140,49 +138,3 @@ export const mockTransactions: Transaction[] = [
 ];
 
 export const mockCurrentPeriod = "October 2026";
-
-export const mockMonthlySummary: MonthlySummary = {
-  income: "45000.00",
-  expenses: "5000.00",
-  net: "40000.00",
-};
-
-export const mockCategorySpend: CategorySpend[] = [
-  { category: "Food", amount: "2100.00" },
-  { category: "Bills", amount: "1200.00" },
-  { category: "Transport", amount: "800.00" },
-  { category: "Shopping", amount: "600.00" },
-  { category: "Other", amount: "300.00" },
-];
-
-export const mockSpendingTrend: MonthlySpend[] = [
-  { month: "May", expenses: "4200.00" },
-  { month: "Jun", expenses: "5100.00" },
-  { month: "Jul", expenses: "4650.00" },
-  { month: "Aug", expenses: "5800.00" },
-  { month: "Sep", expenses: "4950.00" },
-  { month: "Oct", expenses: "5000.00" },
-];
-
-export const mockSavingsGoals: SavingsGoal[] = [
-  {
-    id: "goal-001",
-    name: "Emergency fund",
-    targetAmount: "50000.00",
-    savedAmount: "18500.00",
-    targetDate: "2027-06-30",
-  },
-  {
-    id: "goal-002",
-    name: "Japan trip",
-    targetAmount: "80000.00",
-    savedAmount: "24000.00",
-    targetDate: "2028-03-01",
-  },
-  {
-    id: "goal-003",
-    name: "New laptop",
-    targetAmount: "60000.00",
-    savedAmount: "15000.00",
-  },
-];

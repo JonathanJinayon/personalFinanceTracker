@@ -4,7 +4,7 @@ import { Separator } from "@/components/ui/separator";
 
 export function AppSidebar() {
   return (
-    <aside className="fixed inset-y-0 left-0 z-40 hidden w-64 flex-col border-r border-sidebar-border bg-sidebar lg:flex">
+    <aside className="fixed inset-y-0 left-0 z-40 hidden w-60 flex-col border-r border-sidebar-border bg-sidebar lg:flex">
       <div className="flex h-16 shrink-0 items-center px-5">
         <Brand />
       </div>
@@ -16,7 +16,7 @@ export function AppSidebar() {
         <NavLinks />
       </div>
       <div className="mt-auto p-3">
-        <div className="rounded-xl border border-sidebar-border bg-card p-3.5">
+        <div className="rounded-lg border border-sidebar-border bg-card p-3.5">
           <div className="flex items-center gap-2">
             <span className="relative flex size-2">
               <span className="absolute inline-flex size-full rounded-full bg-success/40" />
@@ -29,7 +29,7 @@ export function AppSidebar() {
           </p>
         </div>
         <p className="mt-3 px-1 text-[11px] text-muted-foreground">
-          Personal Finance · v0.1
+          A little saved today. A better tomorrow.
         </p>
       </div>
     </aside>
