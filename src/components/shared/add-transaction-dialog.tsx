@@ -30,6 +30,7 @@ import {
 } from "@/components/ui/select";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { mockAccounts, mockCategories } from "@/lib/mock-data";
+import type { TransactionType } from "@/types/finance";
 
 function Field({
   label,
@@ -86,7 +87,13 @@ function AccountOptions() {
   );
 }
 
-export function AddTransactionDialog() {
+export function AddTransactionDialog({
+  defaultTab = "expense",
+  trigger,
+}: {
+  defaultTab?: TransactionType;
+  trigger?: ReactNode;
+}) {
   const [open, setOpen] = useState(false);
   const [date, setDate] = useState("");
 
@@ -109,11 +116,13 @@ export function AddTransactionDialog() {
   return (
     <Dialog open={open} onOpenChange={handleOpenChange}>
       <DialogTrigger asChild>
-        <Button size="sm">
-          <Plus data-icon="inline-start" />
-          <span className="hidden sm:inline">Add transaction</span>
-          <span className="sr-only sm:hidden">Add transaction</span>
-        </Button>
+        {trigger ?? (
+          <Button size="sm">
+            <Plus data-icon="inline-start" />
+            <span className="hidden sm:inline">Add transaction</span>
+            <span className="sr-only sm:hidden">Add transaction</span>
+          </Button>
+        )}
       </DialogTrigger>
       <DialogContent className="sm:max-w-lg">
         <DialogHeader>
@@ -123,7 +132,7 @@ export function AddTransactionDialog() {
           </DialogDescription>
         </DialogHeader>
 
-        <Tabs defaultValue="expense" className="gap-4">
+        <Tabs defaultValue={defaultTab} className="gap-4">
           <TabsList className="grid w-full grid-cols-3">
             <TabsTrigger value="expense">
               <ArrowUpRight data-icon="inline-start" />

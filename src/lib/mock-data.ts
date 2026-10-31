@@ -26,6 +26,14 @@ export const mockAccounts: Account[] = [
     isArchived: false,
   },
   {
+    id: "acc-maya",
+    name: "Maya",
+    type: "ewallet",
+    accountNumber: "•••• 2210",
+    balance: "8500.00",
+    isArchived: false,
+  },
+  {
     id: "acc-cash",
     name: "Cash",
     type: "cash",
@@ -34,7 +42,7 @@ export const mockAccounts: Account[] = [
   },
 ];
 
-export const mockTotalBalance = "45000.00";
+export const mockTotalBalance = "53500.00";
 
 export const mockCategories: Category[] = [
   { id: "cat-food", name: "Food" },
@@ -55,6 +63,16 @@ export const mockTransactions: Transaction[] = [
     amount: "250.00",
     accountId: "acc-bpi",
     accountName: "BPI Savings",
+    category: "Food",
+  },
+  {
+    id: "txn-007",
+    type: "expense",
+    date: "2026-10-29",
+    description: "Coffee and snacks",
+    amount: "320.00",
+    accountId: "acc-maya",
+    accountName: "Maya",
     category: "Food",
   },
   {
@@ -107,6 +125,8 @@ export const mockTransactions: Transaction[] = [
     category: "Transport",
   },
 ];
+
+export const mockCurrentPeriod = "October 2026";
 
 export const mockMonthlySummary: MonthlySummary = {
   income: "45000.00",
