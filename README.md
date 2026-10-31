@@ -8,7 +8,8 @@ Frontend-first. The interface currently runs on local mock data. There is no aut
 
 - Application shell and design system: complete
 - Dashboard UI: complete (mock data)
-- Accounts, Transactions, Savings, Reports, Settings: placeholders
+- Accounts UI: complete (mock data, temporary in-session changes)
+- Transactions, Savings, Reports, Settings: placeholders
 
 ## Tech Stack
 

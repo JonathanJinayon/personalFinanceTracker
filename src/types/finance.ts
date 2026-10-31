@@ -8,6 +8,7 @@ export interface Account {
   type: AccountType;
   accountNumber?: string;
   balance: string;
+  description?: string;
   isArchived: boolean;
 }
 

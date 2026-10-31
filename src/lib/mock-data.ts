@@ -15,6 +15,7 @@ export const mockAccounts: Account[] = [
     type: "bank",
     accountNumber: "•••• 4821",
     balance: "30000.00",
+    description: "Main savings account for bills and daily spending.",
     isArchived: false,
   },
   {
@@ -23,6 +24,7 @@ export const mockAccounts: Account[] = [
     type: "ewallet",
     accountNumber: "•••• 0917",
     balance: "10000.00",
+    description: "Everyday e-wallet for transfers and online payments.",
     isArchived: false,
   },
   {
@@ -31,6 +33,7 @@ export const mockAccounts: Account[] = [
     type: "ewallet",
     accountNumber: "•••• 2210",
     balance: "8500.00",
+    description: "Digital wallet for subscriptions and utilities.",
     isArchived: false,
   },
   {
@@ -38,7 +41,17 @@ export const mockAccounts: Account[] = [
     name: "Cash",
     type: "cash",
     balance: "5000.00",
+    description: "Physical cash on hand.",
     isArchived: false,
+  },
+  {
+    id: "acc-metrobank",
+    name: "Metrobank Payroll",
+    type: "bank",
+    accountNumber: "•••• 7754",
+    balance: "0.00",
+    description: "Previous payroll account, kept for transaction history.",
+    isArchived: true,
   },
 ];
 

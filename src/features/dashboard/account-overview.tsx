@@ -1,11 +1,5 @@
 import Link from "next/link";
-import {
-  Banknote,
-  ChevronRight,
-  Smartphone,
-  Wallet,
-  type LucideIcon,
-} from "lucide-react";
+import { ChevronRight } from "lucide-react";
 import { Money } from "@/components/shared/money";
 import { Button } from "@/components/ui/button";
 import {
@@ -17,19 +11,11 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { Separator } from "@/components/ui/separator";
-import type { Account, AccountType } from "@/types/finance";
-
-const accountIcons: Record<AccountType, LucideIcon> = {
-  bank: Banknote,
-  ewallet: Smartphone,
-  cash: Wallet,
-};
-
-const accountTypeLabels: Record<AccountType, string> = {
-  bank: "Bank",
-  ewallet: "E-wallet",
-  cash: "Cash",
-};
+import {
+  accountTypeIcons,
+  accountTypeLabels,
+} from "@/lib/account-meta";
+import type { Account } from "@/types/finance";
 
 export function AccountOverview({
   accounts,
@@ -57,7 +43,7 @@ export function AccountOverview({
       <CardContent className="flex flex-1 flex-col">
         <ul className="space-y-0.5">
           {activeAccounts.map((account) => {
-            const Icon = accountIcons[account.type];
+            const Icon = accountTypeIcons[account.type];
 
             return (
               <li
