@@ -32,16 +32,11 @@ create table public.accounts (
   idempotency_key text not null check (char_length(idempotency_key) between 1 and 100),
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now(),
+  request_fingerprint text not null,
   constraint accounts_id_user_unique unique (id, user_id),
   constraint accounts_user_idempotency_unique unique (user_id, idempotency_key),
   constraint accounts_archived_at_consistent check ((status = 'archived') = (archived_at is not null))
 );
-
-create unique index accounts_user_active_name_uidx
-  on public.accounts (user_id, lower(btrim(name)))
-  where status = 'active';
-
-create index accounts_user_status_idx on public.accounts (user_id, status);
 
 create table public.account_opening_balance_changes (
   id uuid primary key default gen_random_uuid(),
@@ -49,13 +44,14 @@ create table public.account_opening_balance_changes (
   account_id uuid not null,
   previous_amount numeric(14,2) not null check (previous_amount >= 0),
   new_amount numeric(14,2) not null check (new_amount >= 0),
-  changed_at timestamptz not null default now(),
-  constraint account_opening_balance_changes_account_fk
-    foreign key (account_id, user_id)
-    references public.accounts (id, user_id)
-    on delete no action deferrable initially deferred,
-  constraint account_opening_balance_changes_actual_change
-    check (previous_amount <> new_amount)
+  changed_at timestamptz not null default clock_timestamp(),
+  opening_transaction_id uuid,
+  actor_user_id uuid references auth.users (id) on delete set null,
+  request_fingerprint text,
+  idempotency_key text,
+  constraint account_opening_balance_changes_account_fk foreign key (account_id, user_id)
+    references public.accounts (id, user_id) on delete no action deferrable initially deferred,
+  constraint account_opening_balance_changes_actual_change check (previous_amount <> new_amount)
 );
 
 create index account_opening_balance_changes_user_account_idx
@@ -70,12 +66,17 @@ create table public.categories (
   is_archived boolean not null default false,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now(),
+  is_system boolean not null default false,
   constraint categories_id_user_unique unique (id, user_id)
 );
 
 create unique index categories_user_active_name_type_uidx
   on public.categories (user_id, lower(btrim(name)), category_type)
   where is_archived = false;
+
+create unique index categories_one_system_transfer_fees_uidx
+  on public.categories (user_id)
+  where is_system and category_type = 'expense' and lower(btrim(name)) = 'transfer fees';
 
 create index categories_user_type_idx on public.categories (user_id, category_type, is_archived);
 
@@ -123,6 +124,10 @@ create index transactions_user_category_idx
 create index transactions_user_related_idx
   on public.transactions (user_id, related_transaction_id);
 
+create unique index accounts_user_active_name_uidx
+  on public.accounts (user_id, lower(btrim(name))) where status = 'active';
+create index accounts_user_status_idx on public.accounts (user_id, status);
+
 create table public.transaction_entries (
   id uuid primary key default gen_random_uuid(),
   user_id uuid not null references auth.users (id) on delete cascade,
@@ -169,10 +174,12 @@ create table public.savings_allocations (
   note text not null default '' check (char_length(note) <= 300),
   idempotency_key text not null check (char_length(idempotency_key) between 1 and 100),
   created_at timestamptz not null default now(),
+  request_fingerprint text not null,
   constraint savings_allocations_goal_fk foreign key (goal_id, user_id)
     references public.savings_goals (id, user_id) on delete no action deferrable initially deferred,
   constraint savings_allocations_id_user_unique unique (id, user_id),
-  constraint savings_allocations_user_idempotency_unique unique (user_id, idempotency_key)
+  constraint savings_allocations_user_idempotency_unique unique (user_id, idempotency_key),
+  constraint savings_allocations_request_fingerprint_required check (request_fingerprint is not null)
 );
 
 create index savings_allocations_user_goal_idx
@@ -187,6 +194,7 @@ create table public.savings_allocation_adjustments (
   note text not null default '' check (char_length(note) <= 300),
   idempotency_key text not null check (char_length(idempotency_key) between 1 and 100),
   created_at timestamptz not null default now(),
+  request_fingerprint text not null,
   constraint savings_allocation_adjustments_allocation_fk
     foreign key (allocation_id, user_id)
     references public.savings_allocations (id, user_id)
@@ -197,6 +205,71 @@ create table public.savings_allocation_adjustments (
 
 create index savings_allocation_adjustments_user_allocation_idx
   on public.savings_allocation_adjustments (user_id, allocation_id, adjustment_date desc);
+
+create table public.account_opening_balance_versions (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null references auth.users (id) on delete cascade,
+  account_id uuid not null,
+  opening_transaction_id uuid not null,
+  previous_amount numeric(14,2) not null check (previous_amount >= 0),
+  new_amount numeric(14,2) not null check (new_amount >= 0),
+  changed_at timestamptz not null default clock_timestamp(),
+  actor_user_id uuid references auth.users (id) on delete set null,
+  request_fingerprint text not null,
+  idempotency_key text not null,
+  constraint account_opening_balance_versions_account_fk
+    foreign key (account_id, user_id) references public.accounts (id, user_id)
+    on delete no action deferrable initially deferred,
+  constraint account_opening_balance_versions_transaction_fk
+    foreign key (opening_transaction_id, user_id) references public.transactions (id, user_id)
+    on delete no action deferrable initially deferred,
+  constraint account_opening_balance_versions_unique_key
+    unique (user_id, account_id, idempotency_key),
+  constraint account_opening_balance_versions_distinct_amounts
+    check (previous_amount <> new_amount)
+);
+
+create index account_opening_balance_versions_account_time_idx
+  on public.account_opening_balance_versions (user_id, account_id, changed_at desc, id desc);
+
+create table public.savings_goal_changes (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null references auth.users (id) on delete cascade,
+  goal_id uuid not null,
+  previous_name text not null,
+  new_name text not null,
+  previous_target_amount numeric(14,2) not null check (previous_target_amount > 0),
+  new_target_amount numeric(14,2) not null check (new_target_amount > 0),
+  previous_target_date date,
+  new_target_date date,
+  changed_at timestamptz not null default clock_timestamp(),
+  actor_user_id uuid references auth.users (id) on delete set null,
+  constraint savings_goal_changes_goal_fk
+    foreign key (goal_id, user_id) references public.savings_goals (id, user_id)
+    on delete no action deferrable initially deferred
+);
+
+create index savings_goal_changes_goal_time_idx
+  on public.savings_goal_changes (user_id, goal_id, changed_at desc, id desc);
+
+create table public.idempotency_requests (
+  user_id uuid not null references auth.users (id) on delete cascade,
+  idempotency_key text not null,
+  operation_name text not null,
+  request_fingerprint text not null,
+  result_id uuid,
+  created_at timestamptz not null default clock_timestamp(),
+  primary key (user_id, idempotency_key),
+  constraint idempotency_requests_result_transaction_fk
+    foreign key (result_id, user_id) references public.transactions (id, user_id)
+    on delete no action deferrable initially deferred
+);
+
+alter table public.account_opening_balance_changes
+  add constraint account_opening_balance_changes_transaction_fk
+  foreign key (opening_transaction_id, user_id)
+  references public.transactions (id, user_id)
+  on delete no action deferrable initially deferred;
 
 comment on type public.account_type is
   'Asset account types for MVP. Liabilities can be added as enum values in a future migration.';
@@ -210,6 +283,10 @@ comment on table public.savings_allocation_adjustments is
   'Signed, append-only corrections to an allocation. They never change account balances.';
 comment on table public.account_opening_balance_changes is
   'Append-only audit of opening-balance edits. Written only by account opening RPCs; never deleted.';
+comment on table public.account_opening_balance_versions is
+  'Append-only opening-balance corrections; opening transaction identity is retained and ledger entries are never edited.';
+comment on table public.savings_goal_changes is
+  'Append-only audit of goal name, target, and target-date changes.';
 comment on column public.transactions.related_transaction_id is
   'Reversal target, or the parent transfer for a transfer-fee expense.';
 comment on column public.transactions.transaction_date is
