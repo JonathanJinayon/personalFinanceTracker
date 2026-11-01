@@ -44,7 +44,7 @@ Supabase
 ### 2.2 Frontend and server-side operations
 
 - **Server Components** render dashboards, lists, and reports by querying Supabase with the authenticated user's session. Aggregations for reports are done in SQL where possible so monetary math stays in PostgreSQL.
-- **Server Actions** handle all writes: create account, post income/expense/transfer, reverse transaction, add savings contribution.
+- **Server Actions** handle all writes: create account, post income/expense/transfer, reverse transaction, add savings allocation.
 - **Client Components** are limited to interactive UI (forms, filters, charts) and receive already-computed values from the server.
 - Client-side Zod validation improves UX only; server-side Zod validation plus database validation is authoritative.
 
@@ -144,14 +144,36 @@ Folders are created only when their feature is implemented.
 
 ## 4. Database Design
 
-All user-owned tables carry `user_id uuid NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE`. Monetary columns use `numeric(14,2)`. Currency is `char(3)` and fixed to `PHP` at launch.
+All user-owned tables carry `user_id uuid NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE`. Monetary columns use `numeric(14,2)`. Currency is `char(3)` and fixed to `PHP` at launch. Primary keys are UUIDs.
+
+The schema is versioned in `supabase/migrations/`:
+
+- `001_initial_schema.sql` — enums, tables, constraints, indexes, and views.
+- `002_row_level_security.sql` — RLS policies and table/view/type privileges.
+- `003_database_functions.sql` — integrity triggers, atomic RPCs, and default-data bootstrap.
 
 ### 4.1 Enums
 
 - `account_type`: `bank`, `ewallet`, `cash`
+- `account_status`: `active`, `archived`
+- `category_type`: `income`, `expense`
 - `transaction_type`: `opening_balance`, `income`, `expense`, `transfer`, `reversal`
+- `savings_goal_status`: `active`, `completed`, `archived`
 
-### 4.2 `accounts`
+### 4.2 `profiles`
+
+| Column | Type | Constraints |
+| --- | --- | --- |
+| `id` | `uuid` | PK, FK `auth.users(id)` ON DELETE CASCADE |
+| `display_name` | `text` | NOT NULL, default `''`, length ≤ 80 |
+| `created_at` | `timestamptz` | NOT NULL, default `now()` |
+| `updated_at` | `timestamptz` | NOT NULL, default `now()` |
+
+- `id` is the Supabase Auth user ID.
+- Created automatically by the `on_auth_user_created` trigger for new users; existing users are backfilled by migration 003.
+- Users may read and update only their own profile.
+
+### 4.3 `accounts`
 
 | Column | Type | Constraints |
 | --- | --- | --- |
@@ -160,28 +182,36 @@ All user-owned tables carry `user_id uuid NOT NULL REFERENCES auth.users(id) ON 
 | `name` | `text` | NOT NULL, length 1–80 |
 | `type` | `account_type` | NOT NULL |
 | `currency` | `char(3)` | NOT NULL, default `'PHP'`, CHECK `= 'PHP'` |
-| `is_archived` | `boolean` | NOT NULL, default `false` |
-| `archived_at` | `timestamptz` | NULL |
+| `status` | `account_status` | NOT NULL, default `'active'` |
+| `archived_at` | `timestamptz` | NULL, consistent with `status` |
+| `idempotency_key` | `text` | NOT NULL, unique per user |
 | `created_at` | `timestamptz` | NOT NULL, default `now()` |
 | `updated_at` | `timestamptz` | NOT NULL, default `now()` |
 
-- Unique index on `(user_id, lower(name)) WHERE is_archived = false`.
-- No stored balance column. Archived accounts keep all history.
+- Unique index on `(user_id, lower(btrim(name))) WHERE status = 'active'`.
+- `UNIQUE (id, user_id)` exists to support same-user composite foreign keys.
+- **Opening balance is not a mutable column.** It is recorded exactly once as an `opening_balance` transaction with one positive entry when the account is created. The `account_balances` view exposes it as `opening_balance`, so it is stored separately from income and cannot be counted twice.
+- Archived accounts keep all history. A trigger keeps `archived_at` consistent with `status`.
+- No stored balance column; see §4.9.
 
-### 4.3 `categories`
+### 4.4 `categories`
 
 | Column | Type | Constraints |
 | --- | --- | --- |
 | `id` | `uuid` | PK |
 | `user_id` | `uuid` | NOT NULL, FK `auth.users(id)` |
 | `name` | `text` | NOT NULL, length 1–60 |
+| `category_type` | `category_type` | NOT NULL |
+| `icon` | `text` | NULL, optional identifier (for example a lucide icon name) |
 | `is_archived` | `boolean` | NOT NULL, default `false` |
 | `created_at` | `timestamptz` | NOT NULL, default `now()` |
+| `updated_at` | `timestamptz` | NOT NULL, default `now()` |
 
-- Unique index on `(user_id, lower(name)) WHERE is_archived = false`.
-- Default categories are inserted for the user (e.g., Food, Transport, Bills, Shopping, Health, Transfer Fees, Other).
+- Unique index on `(user_id, lower(btrim(name)), category_type) WHERE is_archived = false`.
+- Categories are per-user. Default categories are seeded by `handle_new_user()` at sign-up and backfilled for existing users.
+- Defaults: income — Salary, Business, Gifts, Other Income; expense — Food, Transport, Bills, Shopping, Health, Entertainment, Transfer Fees, Other.
 
-### 4.4 `transactions`
+### 4.5 `transactions`
 
 | Column | Type | Constraints |
 | --- | --- | --- |
@@ -190,35 +220,43 @@ All user-owned tables carry `user_id uuid NOT NULL REFERENCES auth.users(id) ON 
 | `type` | `transaction_type` | NOT NULL |
 | `transaction_date` | `date` | NOT NULL |
 | `description` | `text` | NOT NULL, default `''`, length ≤ 500 |
-| `category_id` | `uuid` | NULL, FK `categories(id)` ON DELETE RESTRICT |
-| `related_transaction_id` | `uuid` | NULL, FK `transactions(id)` |
-| `idempotency_key` | `text` | NOT NULL |
+| `category_id` | `uuid` | NULL, same-user FK `categories(id, user_id)` |
+| `related_transaction_id` | `uuid` | NULL, same-user FK `transactions(id, user_id)` |
+| `idempotency_key` | `text` | NOT NULL, unique per user |
 | `created_at` | `timestamptz` | NOT NULL, default `now()` |
 
 Constraints:
 - `UNIQUE (user_id, idempotency_key)`.
-- `CHECK (type = 'expense' AND category_id IS NOT NULL) OR (type <> 'expense' AND category_id IS NULL)`.
-- `CHECK (type = 'reversal' AND related_transaction_id IS NOT NULL) OR (type <> 'reversal')`.
-- `related_transaction_id` is also used by a transfer-fee expense to reference its transfer.
-- No UPDATE/DELETE of financial rows by the application except explicit reversal flow.
+- Expense requires a category; only income/expense may carry one.
+- Reversal requires `related_transaction_id`; the RPCs also use it to link a transfer-fee expense to its transfer.
+- `UNIQUE (related_transaction_id) WHERE type = 'reversal'` prevents a second reversal of the same transaction.
+- The amount and account live on `transaction_entries`, not on this header. This keeps transfers double-entry and prevents header/entry drift.
+- `transaction_summary` exposes a denormalized amount and source/destination accounts for reads.
+- No `updated_at`: posted financial headers are immutable.
 
-### 4.5 `transaction_entries`
+### 4.6 `transaction_entries`
 
 | Column | Type | Constraints |
 | --- | --- | --- |
 | `id` | `uuid` | PK |
 | `user_id` | `uuid` | NOT NULL, FK `auth.users(id)` |
-| `transaction_id` | `uuid` | NOT NULL, FK `transactions(id)` ON DELETE RESTRICT |
-| `account_id` | `uuid` | NOT NULL, FK `accounts(id)` ON DELETE RESTRICT |
+| `transaction_id` | `uuid` | NOT NULL, same-user FK `transactions(id, user_id)` |
+| `account_id` | `uuid` | NOT NULL, same-user FK `accounts(id, user_id)` |
 | `amount` | `numeric(14,2)` | NOT NULL, CHECK `<> 0` |
 | `created_at` | `timestamptz` | NOT NULL, default `now()` |
 
 - `UNIQUE (transaction_id, account_id)`.
-- Index `(user_id, account_id)`.
-- `user_id` is denormalized from `transactions` purely to make RLS direct and simple; it must match the parent transaction's `user_id` (enforced in the Postgres functions and a trigger).
-- **Sign convention:** positive = money into that account; negative = money out of that account.
+- Indexes `(user_id, account_id)` and `(transaction_id)`.
+- **Sign convention:** positive = money into that account; negative = money out.
+- **Shape rules** are enforced by a deferred constraint trigger:
+  - opening balance / income: exactly one positive entry.
+  - expense: exactly one negative entry.
+  - transfer: exactly two entries, one positive and one negative, summing to zero; the unique constraint guarantees distinct accounts.
+  - reversal: entries must exactly negate the original entry set.
+- Composite `(id, user_id)` foreign keys make cross-user references impossible even outside the RPCs.
+- No `updated_at`: entries are append-only.
 
-### 4.6 `savings_goals`
+### 4.7 `savings_goals`
 
 | Column | Type | Constraints |
 | --- | --- | --- |
@@ -228,43 +266,38 @@ Constraints:
 | `target_amount` | `numeric(14,2)` | NOT NULL, CHECK `> 0` |
 | `currency` | `char(3)` | NOT NULL, default `'PHP'`, CHECK `= 'PHP'` |
 | `target_date` | `date` | NULL |
-| `is_archived` | `boolean` | NOT NULL, default `false` |
+| `status` | `savings_goal_status` | NOT NULL, default `'active'` |
+| `archived_at` | `timestamptz` | NULL, consistent with `status` |
 | `created_at` | `timestamptz` | NOT NULL, default `now()` |
 | `updated_at` | `timestamptz` | NOT NULL, default `now()` |
 
-### 4.7 `savings_contributions`
+### 4.8 `savings_allocations`
 
 | Column | Type | Constraints |
 | --- | --- | --- |
 | `id` | `uuid` | PK |
 | `user_id` | `uuid` | NOT NULL, FK `auth.users(id)` |
-| `goal_id` | `uuid` | NOT NULL, FK `savings_goals(id)` ON DELETE RESTRICT |
+| `goal_id` | `uuid` | NOT NULL, same-user FK `savings_goals(id, user_id)` |
 | `amount` | `numeric(14,2)` | NOT NULL, CHECK `> 0` |
-| `contribution_date` | `date` | NOT NULL |
+| `allocation_date` | `date` | NOT NULL |
 | `note` | `text` | NOT NULL, default `''`, length ≤ 300 |
-| `idempotency_key` | `text` | NOT NULL |
+| `idempotency_key` | `text` | NOT NULL, unique per user |
 | `created_at` | `timestamptz` | NOT NULL, default `now()` |
 
-- `UNIQUE (user_id, idempotency_key)`.
-- Contributions are **informational only** in this design and do not change account balances (see §5.5 and Open Questions).
+- Allocations are **informational earmarks only**. They never create account entries, change balances, or appear in income/expense totals.
+- `savings_goal_progress` calculates allocated amount, remaining amount, and capped completion percentage in SQL.
 
-### 4.8 Views
+### 4.9 Views
 
-**`account_balances`** (`security_invoker = true`):
+All views use `security_invoker = true`, so the caller's RLS applies.
 
-```sql
-account_id, user_id, account_name, account_type, is_archived,
-balance = SUM(transaction_entries.amount)
-```
+- **`account_balances`** — one row per account: `opening_balance`, `balance = SUM(transaction_entries.amount)`, and `entry_count`. This is the only balance source of truth; balances are never stored.
+- **`transaction_effects`** — entry-level ledger with `effective_type`: a reversal inherits its original transaction's type and category, so reports net reversals correctly. Opening balances and transfers remain excluded from income/expense.
+- **`transaction_summary`** — transaction view with amount, source/destination accounts, category name, and linked transfer fee.
+- **`monthly_totals`** — per-user, per-month income/expense/net totals. Transfer fees are expenses; opening balances and transfers are excluded. `transfer_net` is an integrity check and should remain zero.
+- **`savings_goal_progress`** — allocated, remaining, and completion percentage for each goal.
 
-**`transaction_totals`** for dashboard/reports:
-
-- Income total = `SUM(amount)` of entries whose transaction `type = 'income'`.
-- Expense total = `SUM(-amount)` of entries whose transaction `type = 'expense'` (stored negative, displayed positive).
-- Overall funds (active accounts) = `SUM(entries.amount)` joined to accounts where `is_archived = false`.
-- Opening balances and transfers are excluded from income/expense totals.
-
-Balances are derived, never stored. At personal-usage data volumes, summing an indexed entries table is inexpensive. A materialized view is not needed for MVP.
+Balances and reports are derived from the indexed entries table. At personal-usage volume, a materialized view is unnecessary.
 
 ## 5. Financial Logic
 
@@ -315,56 +348,64 @@ Example: BPI 10,000.00, GCash 2,000.00. Transfer 1,500.00 with 15.00 fee:
 
 ### 5.5 Savings goals
 
-- A goal has a target and optional target date.
-- Progress = `SUM(savings_contributions.amount)` for that goal.
-- Remaining = `MAX(target_amount - progress, 0)`.
-- Completion % = `LEAST(progress / target_amount * 100, 100)` computed in SQL/`numeric`.
-- Contributions are progress records only; the money stays in the linked real accounts and is already counted there. This is the explicit choice that prevents double-counting.
-- If contributions must move real money, that requires a separate decision: model each contribution as a transfer to a designated savings account instead (see Open Questions).
+- A goal has a target, optional target date, and status.
+- Progress = `SUM(savings_allocations.amount)` for that goal.
+- Remaining = `MAX(target_amount - allocated, 0)`.
+- Completion % = `LEAST(allocated / target_amount * 100, 100)` computed in SQL/`numeric`.
+- Allocations are progress records only; the money stays in the real accounts and is already counted there. This explicit choice prevents double-counting.
+- Allocations never create `transactions` or `transaction_entries`, so they cannot inflate balances, income, or expenses.
 
 ### 5.6 Transaction history, editing, cancellation
 
-- `transactions` and `transaction_entries` are append-oriented. Financial fields are **immutable** after posting.
-- **Correction:** a `reversal` transaction is created whose entries are the exact negation of the original entries (reversing a transfer with fee also reverses its linked fee transaction atomically). History retains both records; totals net to zero for the reversed item.
+- `transactions` and `transaction_entries` are append-oriented. Financial fields are **immutable** after posting; clients receive `SELECT` only on both tables and no write policy.
+- **Correction:** a `reversal` transaction is created whose entries are the exact negation of the original entries. Reversing a transfer with a fee also creates a reversal for each linked fee expense atomically.
+- A reversal inherits the original type and category in `transaction_effects`, so income/expense reports net correctly. It is dated on the reversal date, making the correction visible in the period it was made.
 - A corrected entry is then posted as a new transaction.
-- **Cancellation** is therefore a reversal, not a hard delete.
-- Non-financial metadata (description) may be edited in a future revision; that rule is unresolved (Open Questions).
+- **Cancellation** is therefore a reversal, not a hard delete. Opening balances cannot be reversed (see Open Questions).
 - UI must never silently overwrite or delete a posted financial row.
 
 ### 5.7 Duplicate prevention
 
-- Every mutating form receives a client-generated `idempotency_key` (UUID).
-- `UNIQUE (user_id, idempotency_key)` on `transactions` and `savings_contributions`.
-- On unique violation, the server returns the existing record instead of inserting again.
-- Postgres functions take the key as an argument and perform the insert once.
+- Every mutating financial form receives a client-generated `idempotency_key` (UUID).
+- `UNIQUE (user_id, idempotency_key)` on `accounts`, `transactions`, and `savings_allocations`.
+- Each RPC checks for an existing key before inserting and uses `ON CONFLICT ... DO NOTHING` plus a re-select to handle concurrent retries.
+- Internal rows created by one RPC (opening balance, transfer fee, fee reversal) receive generated keys because the parent operation is already idempotent.
+- On a duplicate key, the RPC returns the existing record instead of creating another.
 
 ### 5.8 Postgres functions (RPC)
 
-All are `SECURITY INVOKER` (RLS applies), use a fixed `search_path`, derive the user from `auth.uid()`, and validate ownership:
+Ledger-mutating functions are `SECURITY DEFINER` with a fixed `search_path`, derive the user from `auth.uid()`, and re-check ownership of every referenced row. This prevents direct PostgREST writes from bypassing atomic financial rules; RLS still governs all reads. `EXECUTE` is revoked from `public`/`anon` and granted only to `authenticated`.
 
-- `create_account(name, type, opening_balance, idempotency_key)`
-- `post_income(account_id, amount, transaction_date, description, idempotency_key)`
+- `create_account(name, type, opening_balance, idempotency_key)` — creates the account and, when opening balance > 0, its `opening_balance` transaction and entry in one transaction.
+- `post_income(account_id, amount, transaction_date, description, idempotency_key, category_id default null)`
 - `post_expense(account_id, category_id, amount, transaction_date, description, idempotency_key)`
 - `post_transfer(source_account_id, destination_account_id, amount, fee, transaction_date, description, idempotency_key)`
 - `reverse_transaction(transaction_id, transaction_date, description, idempotency_key)`
-- `add_savings_contribution(goal_id, amount, contribution_date, note, idempotency_key)`
-- `archive_account(account_id)` (sets archive flag; does not delete)
+- `add_savings_allocation(goal_id, amount, allocation_date, note, idempotency_key)`
 
-Validation inside functions: positive amounts, valid account/category ownership, distinct transfer accounts, active status rules, fee ≥ 0.
+Validation inside functions: positive amounts, two-decimal precision, valid active account/category/goal ownership, distinct transfer accounts, active account status, and fee ≥ 0. Negative balances are not blocked (Open Question 7).
+
+Non-financial metadata writes stay direct but RLS-protected: profile display name, category create/edit/archive, account name/type/archive, and goal create/edit/archive. None of these touch the ledger. Account and goal archive timestamps are kept consistent by trigger.
 
 ## 6. Security
 
 - Supabase Authentication required for every app route; middleware redirects unauthenticated sessions to `/login`.
-- RLS enabled on `accounts`, `categories`, `transactions`, `transaction_entries`, `savings_goals`, `savings_contributions`.
-- Policies use `user_id = auth.uid()` for `SELECT`, `INSERT`, `UPDATE`, `DELETE` (with `WITH CHECK` on writes). Views are `security_invoker` so they inherit RLS.
+- RLS is enabled on `profiles`, `accounts`, `categories`, `transactions`, `transaction_entries`, `savings_goals`, and `savings_allocations`.
+- Policies use `user_id = (select auth.uid())` (or `id = auth.uid()` for profiles). `SELECT` policies exist on every table; `INSERT`/`UPDATE` policies exist only for non-financial tables.
+- **Ledger tables are read-only to clients:** `transactions` and `transaction_entries` have no `INSERT`/`UPDATE`/`DELETE` policy and only `SELECT` is granted. `savings_allocations` is also read-only and written through its RPC.
+- `accounts` has no client `INSERT`; account creation and opening balance are atomic in `create_account`.
+- Composite `(id, user_id)` foreign keys prevent a row from referencing another user's account, category, transaction, or goal even if a client supplies the UUID.
+- RPCs are `SECURITY DEFINER` and explicitly check `auth.uid()` and row ownership; they never trust client-supplied user IDs or balances.
+- `REVOKE ALL` is applied to `anon` on all tables/views, and type usage/function execution is granted only to `authenticated`.
+- Views use `security_invoker = true`, so RLS is inherited.
+- Profiles and default categories are created by the `on_auth_user_created` trigger (`handle_new_user`); existing users are backfilled without inserting financial data.
 - Server actions call `supabase.auth.getUser()` and reject requests without a valid session.
-- Every Postgres function re-checks that all referenced account/goal/category rows belong to `auth.uid()`. Never trust IDs supplied by the client.
 - The **service-role key** is never placed in `NEXT_PUBLIC_*` variables, client code, or the Vercel frontend environment. Normal application flows do not need it.
 - The anon/publishable key is safe to expose because RLS is mandatory on all user tables.
 - Database is not publicly accessible outside Supabase's API; direct Postgres access is restricted to the project owner.
 - Sign-ups are disabled after the single owner account exists (exact policy in Open Questions). Additional authenticated users would see no rows due to RLS, but sign-ups should still be closed.
 - Financial writes only occur through validated server actions and the RPC functions; no client-side balance writes.
-- Enforce `updated_at` via triggers where rows are editable (accounts, goals).
+- `updated_at` is enforced by triggers on editable rows (profiles, accounts, categories, goals).
 
 ## 7. Testing Strategy
 
@@ -384,10 +425,15 @@ Each test creates its own user and asserts both balances and transaction records
 - **Expense:** account balance decreases; category required; expense totals increase.
 - **Transfer:** both balances change by exact amount; overall funds unchanged when fee = 0; atomicity checked by forcing an error on the second entry (no partial commit).
 - **Transfer with fee:** overall funds decrease by fee only; transfer excluded from income/expense; fee appears as expense.
-- **Savings goal:** progress = sum of contributions; remaining and percentage correct at 0%, partial, and > 100% (capped display).
+- **Savings goal:** progress = sum of allocations; remaining and percentage correct at 0%, partial, and > 100% (capped display).
 - **Reversal:** reversal entries negate originals; net balance returns to pre-transaction value; original remains visible.
+- **Transfer reversal:** reversing a transfer with a fee also reverses the fee expense; balances and expense totals return to pre-transfer values.
+- **Savings allocation isolation:** an allocation changes goal progress but leaves every account balance and income/expense total unchanged.
+- **Ledger shape:** a transfer with one entry or unequal entries is rejected by the deferred constraint trigger; duplicate accounts in one transaction are rejected by the unique constraint.
+- **Same-user references:** a transaction cannot reference another user's category/account even when written directly.
+- **Direct ledger write denial:** authenticated clients cannot `INSERT`/`UPDATE`/`DELETE` transactions or entries.
 - **Idempotency:** submitting the same key twice creates one transaction and returns the same result.
-- **Archived account:** excluded from active totals; historical transactions still visible and account filterable.
+- **Archived account:** excluded from active totals; historical transactions still visible and account filterable; new postings are rejected.
 - **Decimal correctness:** sums of many `numeric` values are exact (e.g., 0.10 × 3 = 0.30; no 0.30000000000000004).
 - **RLS:** user B cannot `SELECT`, `INSERT`, `UPDATE`, or `DELETE` user A's rows; RPC calls with A's account IDs fail for B.
 - **Unauthenticated access:** API/RPC calls without a valid JWT are rejected.
@@ -399,7 +445,7 @@ Each test creates its own user and asserts both balances and transaction records
 - Add income and expense → dashboard and transaction list update.
 - Transfer with fee → both accounts and expense report correct.
 - Filter/search transactions and open details.
-- Create goal, add contribution, see progress.
+- Create goal, add allocation, see progress.
 - Browser tests run against a test deployment/project, not production data.
 
 ### 7.4 Financial regression suite
@@ -409,7 +455,7 @@ Keep a small fixed dataset with expected values (balances, income, expenses, cat
 ## 8. Deployment
 
 - **Vercel:** production and preview deployments from the repository. Environment variables: `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_ANON_KEY`. No service-role key.
-- **Supabase:** one production project; SQL changes applied as versioned migrations via the Supabase CLI. Enable RLS in the same migration that creates each table.
+- **Supabase:** one production project; SQL changes applied as versioned migrations via the Supabase CLI. Apply `001_initial_schema.sql`, then `002_row_level_security.sql`, then `003_database_functions.sql`; RLS is enabled before any application traffic uses the tables. Migrations are not applied automatically by the app.
 - **Auth config:** set Site URL and redirect URLs to the Vercel domain; disable public sign-ups per the chosen policy.
 - **Backups:** rely on Supabase backups for the plan tier; export a manual backup before destructive migration reviews.
 - **Monitoring:** Supabase logs for failed auth/queries and Vercel runtime logs for server action errors.
@@ -420,11 +466,11 @@ Keep a small fixed dataset with expected values (balances, income, expenses, cat
 Carried from the spec:
 
 1. **Sign-up policy:** fully disable sign-ups, or allow only a specific email? (Recommended: create the owner account, then disable sign-ups.)
-2. **Savings contributions:** informational only (this design), or should they move real money between accounts?
-3. **Savings funding source:** if contributions must affect balances, which account funds them?
-4. **Transfer fees:** is a dedicated "Transfer Fees" expense category acceptable as the default?
-5. **Expense categories:** fixed defaults for MVP, or user-editable categories?
-6. **Transaction corrections:** is reversal-plus-repost acceptable, or is controlled in-place editing required?
+2. **Savings allocations:** resolved for now — informational only; they never move real money between accounts.
+3. **Savings funding source:** not applicable while allocations are informational.
+4. **Transfer fees:** resolved — a default `Transfer Fees` expense category is used; the transfer RPC creates it if missing.
+5. **Expense categories:** resolved — per-user categories with seeded defaults; users can add and archive categories.
+6. **Transaction corrections:** resolved — reversal plus repost; no in-place editing of posted financial rows.
 7. **Negative balances:** block operations that would make an account negative, or allow it? (This design does not add a non-negative constraint until decided.)
 8. **Credit accounts:** only asset accounts for MVP, or are credit/liability accounts needed?
 9. **Date semantics:** user-entered `transaction_date` only (this design), or also a recorded time for ordering? Ordering currently uses `created_at` as tiebreaker.
@@ -432,7 +478,9 @@ Carried from the spec:
 
 New questions introduced by this design:
 
-11. **Metadata edits:** may `description` be edited after posting (with an audit trail), or are all edits reversal-only?
-12. **Account archiving with nonzero balance:** is archiving allowed when the derived balance is not zero, and does it require a transfer-out first?
-13. **Default categories:** confirm the starter category list.
-14. **Deletion:** should any user data ever be hard-deleted (e.g., an accidentally created empty account), or is archive/reversal always used?
+11. **Metadata edits:** posted transaction descriptions are immutable in this schema; decide whether a future audit-trailed edit flow is needed.
+12. **Account archiving with nonzero balance:** the current RLS update path allows archiving regardless of balance. Confirm whether a transfer-out should be required first.
+13. **Default categories:** resolved — income: Salary, Business, Gifts, Other Income; expense: Food, Transport, Bills, Shopping, Health, Entertainment, Transfer Fees, Other.
+14. **Deletion:** resolved — financial rows are append-only; use archive/reversal, never hard delete.
+15. **Savings allocation corrections:** allocations are append-only with no update/delete policy. Decide whether reversals or edits are needed.
+16. **Opening balance corrections:** opening balances are immutable and cannot be reversed. Decide whether a controlled correction RPC is needed instead of recreating the account.
