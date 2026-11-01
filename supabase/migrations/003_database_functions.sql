@@ -34,6 +34,34 @@ begin
 end;
 $$;
 
+create or replace function public.assert_signed_money_amount(
+  p_amount numeric,
+  p_field text
+)
+returns void
+language plpgsql
+immutable
+set search_path = public, pg_temp
+as $$
+begin
+  if p_amount is null then
+    raise exception '% is required', p_field using errcode = '22023';
+  end if;
+
+  if p_amount = 0 then
+    raise exception '% must not be zero', p_field using errcode = '22023';
+  end if;
+
+  if p_amount <> round(p_amount, 2) then
+    raise exception '% must have at most two decimal places', p_field using errcode = '22023';
+  end if;
+
+  if abs(p_amount) > 999999999999.99 then
+    raise exception '% exceeds the supported maximum', p_field using errcode = '22003';
+  end if;
+end;
+$$;
+
 create or replace function public.assert_idempotency_key(p_key text)
 returns void
 language plpgsql
@@ -56,6 +84,50 @@ as $$
 begin
   if char_length(coalesce(p_value, '')) > p_max then
     raise exception '% must be at most % characters', p_field, p_max using errcode = '22023';
+  end if;
+end;
+$$;
+
+create or replace function public.current_account_balance(
+  p_user_id uuid,
+  p_account_id uuid
+)
+returns numeric
+language sql
+stable
+security definer
+set search_path = public, pg_temp
+as $$
+  select coalesce(sum(e.amount), 0)::numeric(14,2)
+  from public.transaction_entries e
+  where e.user_id = p_user_id
+    and e.account_id = p_account_id;
+$$;
+
+create or replace function public.assert_balance_not_negative(
+  p_user_id uuid,
+  p_account_id uuid,
+  p_delta numeric,
+  p_context text
+)
+returns void
+language plpgsql
+stable
+security definer
+set search_path = public, pg_temp
+as $$
+declare
+  v_balance numeric;
+begin
+  if p_delta >= 0 then
+    return;
+  end if;
+
+  v_balance := public.current_account_balance(p_user_id, p_account_id);
+
+  if v_balance + p_delta < 0 then
+    raise exception 'Insufficient funds for %: available %, required %',
+      p_context, v_balance, -p_delta using errcode = '23514';
   end if;
 end;
 $$;
@@ -199,6 +271,11 @@ begin
       raise exception 'Expense transaction % must have exactly one negative entry',
         p_transaction_id using errcode = '23514';
     end if;
+  elsif v_transaction.type = 'balance_adjustment' then
+    if v_entry_count <> 1 then
+      raise exception 'Balance adjustment % must have exactly one entry',
+        p_transaction_id using errcode = '23514';
+    end if;
   elsif v_transaction.type = 'transfer' then
     if v_entry_count <> 2 or v_positive_count <> 1 or v_negative_count <> 1 or v_sum <> 0 then
       raise exception 'Transfer transaction % must have exactly two entries summing to zero',
@@ -219,6 +296,11 @@ begin
 
     if v_original.type = 'opening_balance' then
       raise exception 'Opening balances cannot be reversed' using errcode = '23514';
+    end if;
+
+    if v_original.type = 'balance_adjustment' then
+      raise exception 'Balance adjustments cannot be reversed; post the opposite adjustment instead'
+        using errcode = '23514';
     end if;
 
     select count(*) into v_mismatch_count
@@ -331,12 +413,17 @@ begin
       user_id, type, transaction_date, description, idempotency_key
     )
     values (
-      v_user_id, 'opening_balance', current_date, 'Opening balance', gen_random_uuid()::text
+      v_user_id, 'opening_balance', now(), 'Opening balance', gen_random_uuid()::text
     )
     returning id into v_opening_transaction_id;
 
     insert into public.transaction_entries (user_id, transaction_id, account_id, amount)
     values (v_user_id, v_opening_transaction_id, v_account_id, p_opening_balance);
+
+    insert into public.account_opening_balance_changes (
+      user_id, account_id, previous_amount, new_amount
+    )
+    values (v_user_id, v_account_id, 0, p_opening_balance);
   end if;
 
   return v_account_id;
@@ -346,7 +433,7 @@ $$;
 create or replace function public.post_income(
   p_account_id uuid,
   p_amount numeric,
-  p_transaction_date date,
+  p_transaction_date timestamptz,
   p_description text,
   p_idempotency_key text,
   p_category_id uuid default null
@@ -359,6 +446,7 @@ as $$
 declare
   v_user_id uuid := auth.uid();
   v_transaction_id uuid;
+  v_account_status public.account_status;
 begin
   if v_user_id is null then
     raise exception 'Authentication required' using errcode = '28000';
@@ -380,10 +468,20 @@ begin
     return v_transaction_id;
   end if;
 
-  if not exists (
-    select 1 from public.accounts
-    where id = p_account_id and user_id = v_user_id and status = 'active'
-  ) then
+  select status into v_account_status
+  from public.accounts
+  where id = p_account_id and user_id = v_user_id
+  for update;
+
+  select id into v_transaction_id
+  from public.transactions
+  where user_id = v_user_id and idempotency_key = p_idempotency_key;
+
+  if v_transaction_id is not null then
+    return v_transaction_id;
+  end if;
+
+  if v_account_status is null or v_account_status <> 'active' then
     raise exception 'Income account not found or not active' using errcode = '42501';
   end if;
 
@@ -425,7 +523,7 @@ create or replace function public.post_expense(
   p_account_id uuid,
   p_category_id uuid,
   p_amount numeric,
-  p_transaction_date date,
+  p_transaction_date timestamptz,
   p_description text,
   p_idempotency_key text
 )
@@ -437,6 +535,7 @@ as $$
 declare
   v_user_id uuid := auth.uid();
   v_transaction_id uuid;
+  v_account_status public.account_status;
 begin
   if v_user_id is null then
     raise exception 'Authentication required' using errcode = '28000';
@@ -458,12 +557,24 @@ begin
     return v_transaction_id;
   end if;
 
-  if not exists (
-    select 1 from public.accounts
-    where id = p_account_id and user_id = v_user_id and status = 'active'
-  ) then
+  select status into v_account_status
+  from public.accounts
+  where id = p_account_id and user_id = v_user_id
+  for update;
+
+  select id into v_transaction_id
+  from public.transactions
+  where user_id = v_user_id and idempotency_key = p_idempotency_key;
+
+  if v_transaction_id is not null then
+    return v_transaction_id;
+  end if;
+
+  if v_account_status is null or v_account_status <> 'active' then
     raise exception 'Expense account not found or not active' using errcode = '42501';
   end if;
+
+  perform public.assert_balance_not_negative(v_user_id, p_account_id, -p_amount, 'expense');
 
   if not exists (
     select 1 from public.categories
@@ -504,7 +615,7 @@ create or replace function public.post_transfer(
   p_destination_account_id uuid,
   p_amount numeric,
   p_fee numeric,
-  p_transaction_date date,
+  p_transaction_date timestamptz,
   p_description text,
   p_idempotency_key text
 )
@@ -546,6 +657,21 @@ begin
     return v_transaction_id;
   end if;
 
+  perform 1
+  from public.accounts
+  where user_id = v_user_id
+    and id in (p_source_account_id, p_destination_account_id)
+  order by id
+  for update;
+
+  select id into v_transaction_id
+  from public.transactions
+  where user_id = v_user_id and idempotency_key = p_idempotency_key;
+
+  if v_transaction_id is not null then
+    return v_transaction_id;
+  end if;
+
   if not exists (
     select 1 from public.accounts
     where id = p_source_account_id and user_id = v_user_id and status = 'active'
@@ -559,6 +685,13 @@ begin
   ) then
     raise exception 'Destination account not found or not active' using errcode = '42501';
   end if;
+
+  perform public.assert_balance_not_negative(
+    v_user_id,
+    p_source_account_id,
+    -(p_amount + p_fee),
+    'transfer amount and fee'
+  );
 
   insert into public.transactions (
     user_id, type, transaction_date, description, idempotency_key
@@ -627,7 +760,7 @@ $$;
 
 create or replace function public.reverse_transaction(
   p_transaction_id uuid,
-  p_transaction_date date,
+  p_transaction_date timestamptz,
   p_description text,
   p_idempotency_key text
 )
@@ -640,6 +773,8 @@ declare
   v_user_id uuid := auth.uid();
   v_original public.transactions%rowtype;
   v_reversal_id uuid;
+  v_account_id uuid;
+  v_delta numeric;
 begin
   if v_user_id is null then
     raise exception 'Authentication required' using errcode = '28000';
@@ -676,6 +811,11 @@ begin
     raise exception 'Opening balances cannot be reversed' using errcode = '22023';
   end if;
 
+  if v_original.type = 'balance_adjustment' then
+    raise exception 'Balance adjustments cannot be reversed; post the opposite adjustment instead'
+      using errcode = '22023';
+  end if;
+
   if exists (
     select 1 from public.transactions
     where user_id = v_user_id
@@ -684,6 +824,70 @@ begin
   ) then
     raise exception 'Transaction has already been reversed' using errcode = '23505';
   end if;
+
+  perform 1
+  from public.accounts a
+  where a.user_id = v_user_id
+    and a.id in (
+      select e.account_id
+      from public.transaction_entries e
+      where e.transaction_id = p_transaction_id and e.user_id = v_user_id
+    )
+  order by a.id
+  for update;
+
+  select id into v_reversal_id
+  from public.transactions
+  where user_id = v_user_id and idempotency_key = p_idempotency_key;
+
+  if v_reversal_id is not null then
+    return v_reversal_id;
+  end if;
+
+  if exists (
+    select 1
+    from public.accounts a
+    where a.user_id = v_user_id
+      and a.status <> 'active'
+      and a.id in (
+        select e.account_id
+        from public.transaction_entries e
+        where e.transaction_id = p_transaction_id and e.user_id = v_user_id
+      )
+  ) then
+    raise exception 'Archived accounts cannot receive new transactions' using errcode = '23514';
+  end if;
+
+  for v_account_id, v_delta in
+    select x.account_id, sum(x.delta)::numeric(14,2)
+    from (
+      select e.account_id, -e.amount as delta
+      from public.transaction_entries e
+      where e.transaction_id = p_transaction_id and e.user_id = v_user_id
+      union all
+      select e.account_id, -e.amount as delta
+      from public.transactions f
+      join public.transaction_entries e
+        on e.transaction_id = f.id and e.user_id = f.user_id
+      where f.user_id = v_user_id
+        and f.type = 'expense'
+        and f.related_transaction_id = p_transaction_id
+        and not exists (
+          select 1 from public.transactions r
+          where r.user_id = v_user_id
+            and r.type = 'reversal'
+            and r.related_transaction_id = f.id
+        )
+    ) x
+    group by x.account_id
+  loop
+    perform public.assert_balance_not_negative(
+      v_user_id,
+      v_account_id,
+      v_delta,
+      'reversal (post a real deposit or an explicit balance adjustment first)'
+    );
+  end loop;
 
   insert into public.transactions (
     user_id, type, transaction_date, description, related_transaction_id, idempotency_key
@@ -808,6 +1012,285 @@ begin
 end;
 $$;
 
+create or replace function public.update_opening_balance(
+  p_account_id uuid,
+  p_amount numeric
+)
+returns uuid
+language plpgsql
+security definer
+set search_path = public, pg_temp
+as $$
+declare
+  v_user_id uuid := auth.uid();
+  v_account_status public.account_status;
+  v_opening_transaction_id uuid;
+  v_opening_entry_id uuid;
+  v_current_amount numeric;
+begin
+  if v_user_id is null then
+    raise exception 'Authentication required' using errcode = '28000';
+  end if;
+
+  perform public.assert_money_amount(p_amount, 'Opening balance', true);
+
+  select status into v_account_status
+  from public.accounts
+  where id = p_account_id and user_id = v_user_id
+  for update;
+
+  if v_account_status is null or v_account_status <> 'active' then
+    raise exception 'Account not found or not active' using errcode = '42501';
+  end if;
+
+  if exists (
+    select 1
+    from public.transaction_entries e
+    join public.transactions t
+      on t.id = e.transaction_id and t.user_id = e.user_id
+    where e.user_id = v_user_id
+      and e.account_id = p_account_id
+      and t.type <> 'opening_balance'
+  ) then
+    raise exception 'Opening balance can only be edited before financial activity; use adjust_account_balance'
+      using errcode = '23514';
+  end if;
+
+  select t.id, e.id, e.amount
+  into v_opening_transaction_id, v_opening_entry_id, v_current_amount
+  from public.transactions t
+  join public.transaction_entries e
+    on e.transaction_id = t.id and e.user_id = t.user_id
+  where t.user_id = v_user_id
+    and t.type = 'opening_balance'
+    and e.account_id = p_account_id
+  limit 1;
+
+  v_current_amount := coalesce(v_current_amount, 0);
+
+  if p_amount = v_current_amount then
+    return v_opening_transaction_id;
+  end if;
+
+  if p_amount = 0 then
+    if v_opening_transaction_id is not null then
+      delete from public.transaction_entries where id = v_opening_entry_id;
+      delete from public.transactions where id = v_opening_transaction_id;
+    end if;
+
+    insert into public.account_opening_balance_changes (
+      user_id, account_id, previous_amount, new_amount
+    )
+    values (v_user_id, p_account_id, v_current_amount, 0);
+
+    return null;
+  end if;
+
+  if v_opening_transaction_id is null then
+    insert into public.transactions (
+      user_id, type, transaction_date, description, idempotency_key
+    )
+    values (
+      v_user_id, 'opening_balance', now(), 'Opening balance', gen_random_uuid()::text
+    )
+    returning id into v_opening_transaction_id;
+
+    insert into public.transaction_entries (user_id, transaction_id, account_id, amount)
+    values (v_user_id, v_opening_transaction_id, p_account_id, p_amount);
+
+    insert into public.account_opening_balance_changes (
+      user_id, account_id, previous_amount, new_amount
+    )
+    values (v_user_id, p_account_id, v_current_amount, p_amount);
+
+    return v_opening_transaction_id;
+  end if;
+
+  update public.transaction_entries
+  set amount = p_amount
+  where id = v_opening_entry_id;
+
+  insert into public.account_opening_balance_changes (
+    user_id, account_id, previous_amount, new_amount
+  )
+  values (v_user_id, p_account_id, v_current_amount, p_amount);
+
+  return v_opening_transaction_id;
+end;
+$$;
+
+create or replace function public.adjust_account_balance(
+  p_account_id uuid,
+  p_amount numeric,
+  p_effective_date timestamptz,
+  p_reason text,
+  p_idempotency_key text
+)
+returns uuid
+language plpgsql
+security definer
+set search_path = public, pg_temp
+as $$
+declare
+  v_user_id uuid := auth.uid();
+  v_account_status public.account_status;
+  v_transaction_id uuid;
+  v_description text;
+begin
+  if v_user_id is null then
+    raise exception 'Authentication required' using errcode = '28000';
+  end if;
+
+  perform public.assert_signed_money_amount(p_amount, 'Adjustment amount');
+  perform public.assert_idempotency_key(p_idempotency_key);
+  perform public.assert_text_length(p_reason, 500, 'Reason');
+
+  if p_effective_date is null then
+    raise exception 'Effective date is required' using errcode = '22023';
+  end if;
+
+  select id into v_transaction_id
+  from public.transactions
+  where user_id = v_user_id and idempotency_key = p_idempotency_key;
+
+  if v_transaction_id is not null then
+    return v_transaction_id;
+  end if;
+
+  select status into v_account_status
+  from public.accounts
+  where id = p_account_id and user_id = v_user_id
+  for update;
+
+  if v_account_status is null or v_account_status <> 'active' then
+    raise exception 'Account not found or not active' using errcode = '42501';
+  end if;
+
+  select id into v_transaction_id
+  from public.transactions
+  where user_id = v_user_id and idempotency_key = p_idempotency_key;
+
+  if v_transaction_id is not null then
+    return v_transaction_id;
+  end if;
+
+  perform public.assert_balance_not_negative(
+    v_user_id, p_account_id, p_amount, 'balance adjustment'
+  );
+
+  v_description := coalesce(nullif(btrim(p_reason), ''), 'Balance adjustment');
+
+  insert into public.transactions (
+    user_id, type, transaction_date, description, idempotency_key
+  )
+  values (
+    v_user_id, 'balance_adjustment', p_effective_date, v_description, p_idempotency_key
+  )
+  on conflict (user_id, idempotency_key) do nothing
+  returning id into v_transaction_id;
+
+  if v_transaction_id is null then
+    select id into v_transaction_id
+    from public.transactions
+    where user_id = v_user_id and idempotency_key = p_idempotency_key;
+    return v_transaction_id;
+  end if;
+
+  insert into public.transaction_entries (user_id, transaction_id, account_id, amount)
+  values (v_user_id, v_transaction_id, p_account_id, p_amount);
+
+  return v_transaction_id;
+end;
+$$;
+
+create or replace function public.adjust_savings_allocation(
+  p_allocation_id uuid,
+  p_amount numeric,
+  p_adjustment_date date,
+  p_note text,
+  p_idempotency_key text
+)
+returns uuid
+language plpgsql
+security definer
+set search_path = public, pg_temp
+as $$
+declare
+  v_user_id uuid := auth.uid();
+  v_allocation_amount numeric;
+  v_adjustment_total numeric;
+  v_adjustment_id uuid;
+begin
+  if v_user_id is null then
+    raise exception 'Authentication required' using errcode = '28000';
+  end if;
+
+  perform public.assert_signed_money_amount(p_amount, 'Adjustment amount');
+  perform public.assert_idempotency_key(p_idempotency_key);
+  perform public.assert_text_length(p_note, 300, 'Note');
+
+  if p_adjustment_date is null then
+    raise exception 'Adjustment date is required' using errcode = '22023';
+  end if;
+
+  select id into v_adjustment_id
+  from public.savings_allocation_adjustments
+  where user_id = v_user_id and idempotency_key = p_idempotency_key;
+
+  if v_adjustment_id is not null then
+    return v_adjustment_id;
+  end if;
+
+  select a.amount into v_allocation_amount
+  from public.savings_allocations a
+  where a.id = p_allocation_id and a.user_id = v_user_id
+  for update;
+
+  if not found then
+    raise exception 'Savings allocation not found' using errcode = '42501';
+  end if;
+
+  select id into v_adjustment_id
+  from public.savings_allocation_adjustments
+  where user_id = v_user_id and idempotency_key = p_idempotency_key;
+
+  if v_adjustment_id is not null then
+    return v_adjustment_id;
+  end if;
+
+  select coalesce(sum(j.amount), 0)::numeric(14,2)
+  into v_adjustment_total
+  from public.savings_allocation_adjustments j
+  where j.user_id = v_user_id and j.allocation_id = p_allocation_id;
+
+  if v_allocation_amount + v_adjustment_total + p_amount < 0 then
+    raise exception 'Adjustment would reduce the allocation below zero' using errcode = '23514';
+  end if;
+
+  if v_allocation_amount + v_adjustment_total + p_amount > 999999999999.99 then
+    raise exception 'Allocation exceeds the supported maximum' using errcode = '22003';
+  end if;
+
+  insert into public.savings_allocation_adjustments (
+    user_id, allocation_id, amount, adjustment_date, note, idempotency_key
+  )
+  values (
+    v_user_id, p_allocation_id, p_amount, p_adjustment_date,
+    coalesce(p_note, ''), p_idempotency_key
+  )
+  on conflict (user_id, idempotency_key) do nothing
+  returning id into v_adjustment_id;
+
+  if v_adjustment_id is null then
+    select id into v_adjustment_id
+    from public.savings_allocation_adjustments
+    where user_id = v_user_id and idempotency_key = p_idempotency_key;
+  end if;
+
+  return v_adjustment_id;
+end;
+$$;
+
 create trigger profiles_set_updated_at
   before update on public.profiles
   for each row execute function public.set_updated_at();
@@ -848,8 +1331,11 @@ create trigger on_auth_user_created
   for each row execute function public.handle_new_user();
 
 revoke execute on function public.assert_money_amount(numeric, text, boolean) from public, anon, authenticated;
+revoke execute on function public.assert_signed_money_amount(numeric, text) from public, anon, authenticated;
 revoke execute on function public.assert_idempotency_key(text) from public, anon, authenticated;
 revoke execute on function public.assert_text_length(text, integer, text) from public, anon, authenticated;
+revoke execute on function public.current_account_balance(uuid, uuid) from public, anon, authenticated;
+revoke execute on function public.assert_balance_not_negative(uuid, uuid, numeric, text) from public, anon, authenticated;
 revoke execute on function public.set_updated_at() from public, anon, authenticated;
 revoke execute on function public.sync_archived_at() from public, anon, authenticated;
 revoke execute on function public.seed_default_categories(uuid) from public, anon, authenticated;
@@ -858,18 +1344,24 @@ revoke execute on function public.validate_transaction_entries(uuid) from public
 revoke execute on function public.validate_transaction_entries_trigger() from public, anon, authenticated;
 
 revoke execute on function public.create_account(text, public.account_type, numeric, text) from public, anon, authenticated;
-revoke execute on function public.post_income(uuid, numeric, date, text, text, uuid) from public, anon, authenticated;
-revoke execute on function public.post_expense(uuid, uuid, numeric, date, text, text) from public, anon, authenticated;
-revoke execute on function public.post_transfer(uuid, uuid, numeric, numeric, date, text, text) from public, anon, authenticated;
-revoke execute on function public.reverse_transaction(uuid, date, text, text) from public, anon, authenticated;
+revoke execute on function public.update_opening_balance(uuid, numeric) from public, anon, authenticated;
+revoke execute on function public.adjust_account_balance(uuid, numeric, timestamptz, text, text) from public, anon, authenticated;
+revoke execute on function public.post_income(uuid, numeric, timestamptz, text, text, uuid) from public, anon, authenticated;
+revoke execute on function public.post_expense(uuid, uuid, numeric, timestamptz, text, text) from public, anon, authenticated;
+revoke execute on function public.post_transfer(uuid, uuid, numeric, numeric, timestamptz, text, text) from public, anon, authenticated;
+revoke execute on function public.reverse_transaction(uuid, timestamptz, text, text) from public, anon, authenticated;
 revoke execute on function public.add_savings_allocation(uuid, numeric, date, text, text) from public, anon, authenticated;
+revoke execute on function public.adjust_savings_allocation(uuid, numeric, date, text, text) from public, anon, authenticated;
 
 grant execute on function public.create_account(text, public.account_type, numeric, text) to authenticated;
-grant execute on function public.post_income(uuid, numeric, date, text, text, uuid) to authenticated;
-grant execute on function public.post_expense(uuid, uuid, numeric, date, text, text) to authenticated;
-grant execute on function public.post_transfer(uuid, uuid, numeric, numeric, date, text, text) to authenticated;
-grant execute on function public.reverse_transaction(uuid, date, text, text) to authenticated;
+grant execute on function public.update_opening_balance(uuid, numeric) to authenticated;
+grant execute on function public.adjust_account_balance(uuid, numeric, timestamptz, text, text) to authenticated;
+grant execute on function public.post_income(uuid, numeric, timestamptz, text, text, uuid) to authenticated;
+grant execute on function public.post_expense(uuid, uuid, numeric, timestamptz, text, text) to authenticated;
+grant execute on function public.post_transfer(uuid, uuid, numeric, numeric, timestamptz, text, text) to authenticated;
+grant execute on function public.reverse_transaction(uuid, timestamptz, text, text) to authenticated;
 grant execute on function public.add_savings_allocation(uuid, numeric, date, text, text) to authenticated;
+grant execute on function public.adjust_savings_allocation(uuid, numeric, date, text, text) to authenticated;
 
 insert into public.profiles (id, display_name)
 select
